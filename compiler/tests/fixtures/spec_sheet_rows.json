@@ -1,0 +1,13 @@
+{"zones":[{"zone_id":1,"zone_name":"A"},{"zone_id":2,"zone_name":"B"}],
+ "plots":[{"plot_id":1,"zone_id":1},{"plot_id":2,"zone_id":2}],
+ "Device":[
+  {"device_id":"SM1","device_class":"SoilMoistureSensor","plot_id":1},
+  {"device_id":"SM2","device_class":"SoilMoistureSensor","plot_id":2},
+  {"device_id":"NPK1","device_class":"NPKSensor","plot_id":1},
+  {"device_id":"NPK2","device_class":"NPKSensor","plot_id":1},
+  {"device_id":"W1","device_class":"WindSensor","plot_id":1},
+  {"device_id":"AT1","device_class":"AirTempSensor","plot_id":1},
+  {"device_id":"AT1b","device_class":"AirTempSensor","plot_id":1},
+  {"device_id":"AT2","device_class":"AirTempSensor","plot_id":2},
+  {"device_id":"R1","device_class":"RainSensor","plot_id":1}
+ ]}

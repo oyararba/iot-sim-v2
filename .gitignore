@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Generated simulation output
+compiler/out/*
+!compiler/out/.gitkeep
