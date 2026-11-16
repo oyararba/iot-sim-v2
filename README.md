@@ -4,8 +4,6 @@
 
 You describe a deployment in a small SQL-like language: what the sensors measure, how their values are distributed, how often they transmit, and which alerts follow from which readings. IoTSim compiles that description, combines it with a list of the devices that exist, and writes a reproducible stream of events.
 
-Advisor: Dr Jianwen Su (UCSB Computer Science Dept)
-
 This page covers how to run IoTSim and how to read what it produces. The language itself is specified in [docs/REFERENCE.md](docs/REFERENCE.md).
 
 - [Requirements](#requirements)
