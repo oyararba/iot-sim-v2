@@ -273,7 +273,22 @@ class CodeGenerator:
             return streamed[0]
         candidates = [et for et in self.prog.event_types
                       if not streamed or et.name in streamed]
-
+        # Match the device class's measure name (or its class name without
+        # a _Sensor suffix) to the one listed event type whose name contains it:
+        # Ammonia_Sensor / MEASURES Ammonia -> Ammonia_Reading.
+        dc = next((d for d in self.prog.device_classes if d.name == dc_name), None)
+        keys = [m.name.lower() for m in dc.measures] if dc else []
+        stem = dc_name.lower()
+        for suffix in ('_sensor', 'sensor'):
+            if stem.endswith(suffix):
+                stem = stem[:-len(suffix)]
+                break
+        keys.append(stem)
+        for key in keys:
+            hits = [et.name for et in candidates if key and key in et.name.lower()]
+            if len(hits) == 1:
+                return hits[0]
+        
         # Match device class name fragments to event type names
         dc_lower = dc_name.lower()
         for et in candidates:
