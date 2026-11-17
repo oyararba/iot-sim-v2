@@ -33,61 +33,69 @@
 -- ═══════════════════════════════════════════════════════════
 
 CREATE DEVICE CLASS SoilMoistureSensor (
-    MEASURES    Moisture
-    UNIT        percent_VWC
+    MEASURES    VolumeFraction
+    IN          percent
+    FOLLOWING   Moisture
     RANGE       (0.0, 100.0)
     RESOLUTION  0.1,
     zone        ENUM *
 )
 
 CREATE DEVICE CLASS SoilTemperatureSensor (
-    MEASURES    SoilTemp
-    UNIT        celsius
+    MEASURES    Temperature
+    IN          celsius
+    FOLLOWING   SoilTemp
     RANGE       (-10.0, 80.0)
     RESOLUTION  0.1,
     zone        ENUM *
 )
 
 CREATE DEVICE CLASS AirTemperatureSensor (
-    MEASURES    AirTemp
-    UNIT        celsius
+    MEASURES    Temperature
+    IN          celsius
+    FOLLOWING   AirTemp
     RANGE       (-20.0, 60.0)
     RESOLUTION  0.1,
     zone        ENUM *
 )
 
 CREATE DEVICE CLASS HumiditySensor (
-    MEASURES    Humidity
-    UNIT        percent_RH
+    MEASURES    RelativeHumidity
+    IN          percent
+    FOLLOWING   Humidity
     RANGE       (0.0, 100.0)
     RESOLUTION  0.5,
     zone        ENUM *
 )
 
 CREATE DEVICE CLASS SolarRadiationSensor (
-    MEASURES    SolarRadiation
-    UNIT        W_per_m2
+    MEASURES    Irradiance
+    IN          W_per_m2
+    FOLLOWING   SolarRadiation
     RANGE       (0.0, 1400.0)
     RESOLUTION  1.0,
     zone        ENUM *
 )
 
 CREATE DEVICE CLASS RainfallSensor (
-    MEASURES    Rainfall
-    UNIT        mm_per_hour
+    MEASURES    PrecipitationRate
+    IN          mm_per_hour
+    FOLLOWING   Rainfall
     RANGE       (0.0, 300.0)
     RESOLUTION  0.2,
     zone        ENUM *
 )
 
 CREATE DEVICE CLASS WindSensor (
-    MEASURES    WindSpeed           -- value
-    UNIT        m_per_s
+    MEASURES    Speed               -- value
+    IN          m_per_s
+    FOLLOWING   WindSpeed
     RANGE       (0.0, 60.0)
     RESOLUTION  0.1,
 
-    MEASURES    WindDirection       -- value2
-    UNIT        degrees
+    MEASURES    Angle               -- value2
+    IN          degree
+    FOLLOWING   WindDirection
     RANGE       (0.0, 360.0)
     RESOLUTION  1.0,
 
@@ -95,26 +103,30 @@ CREATE DEVICE CLASS WindSensor (
 )
 
 CREATE DEVICE CLASS CO2Sensor (
-    MEASURES    CO2
-    UNIT        ppm
+    MEASURES    AmountFraction
+    IN          ppm
+    FOLLOWING   CO2
     RANGE       (300.0, 2000.0)
     RESOLUTION  1.0,
     zone        ENUM *
 )
 
 CREATE DEVICE CLASS NPKSensor (
-    MEASURES    Nitrogen            -- value
-    UNIT        mg_per_kg
+    MEASURES    MassFraction        -- value
+    IN          mg_per_kg
+    FOLLOWING   Nitrogen
     RANGE       (0.0, 999.0)
     RESOLUTION  1.0,
 
-    MEASURES    Phosphorus          -- value2
-    UNIT        mg_per_kg
+    MEASURES    MassFraction        -- value2
+    IN          mg_per_kg
+    FOLLOWING   Phosphorus
     RANGE       (0.0, 999.0)
     RESOLUTION  1.0,
 
-    MEASURES    Potassium           -- value3
-    UNIT        mg_per_kg
+    MEASURES    MassFraction        -- value3
+    IN          mg_per_kg
+    FOLLOWING   Potassium
     RANGE       (0.0, 999.0)
     RESOLUTION  1.0,
 
@@ -122,24 +134,27 @@ CREATE DEVICE CLASS NPKSensor (
 )
 
 CREATE DEVICE CLASS PHSensor (
-    MEASURES    PH
-    UNIT        pH
+    MEASURES    Acidity
+    IN          pH
+    FOLLOWING   PH
     RANGE       (0.0, 14.0)
     RESOLUTION  0.01,
     zone        ENUM *
 )
 
 CREATE DEVICE CLASS SalinitySensor (
-    MEASURES    Salinity
-    UNIT        dS_per_m
+    MEASURES    ElectricalConductivity
+    IN          dS_per_m
+    FOLLOWING   Salinity
     RANGE       (0.0, 20.0)
     RESOLUTION  0.01,
     zone        ENUM *
 )
 
 CREATE DEVICE CLASS InsectTrapSensor (
-    MEASURES    InsectCount
-    UNIT        count_per_hour
+    MEASURES    CountRate
+    IN          per_hour
+    FOLLOWING   InsectCount
     RANGE       (0.0, 500.0)
     RESOLUTION  1.0,
     zone        ENUM *

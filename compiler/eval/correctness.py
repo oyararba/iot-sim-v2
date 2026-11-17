@@ -105,12 +105,20 @@ class MeasureResult:
     n_devices: int = 1
     sticky: bool = False
     arrival_mode: str = 'PERIODIC'
+    decaying: bool = False
 
     @property
     def applicable(self):
         """ON_CHANGE / ON_THRESHOLD transmit a value-dependent subset of readings,
-        so their observed statistics are not expected to match the declared model."""
-        return self.arrival_mode == 'PERIODIC'
+        and a DECAY battery widens the spread on purpose, so in both cases the
+        observed statistics are not expected to match the declared model."""
+        return self.arrival_mode == 'PERIODIC' and not self.decaying
+
+    @property
+    def skip_reason(self):
+        if self.decaying:
+            return 'DECAY widens the spread as the battery drains'
+        return f'{self.arrival_mode} transmits a value-dependent subset'
 
     @property
     def low_power(self):
@@ -136,7 +144,8 @@ def analyse(events_jsonl, profiles_json,
     data     = json.loads(Path(profiles_json).read_text())
     profiles = data['profiles']
     bindings = data['bindings']
-    streamed = data.get('stream', {}).get('event_type', 'sensor_reading')
+    stream = data.get('stream', {})
+    streamed = set(stream.get('types') or [stream.get('event_type', 'sensor_reading')])
 
     # device → [(field, tier_field, group key)]
     slots = {}
@@ -147,7 +156,8 @@ def analyse(events_jsonl, profiles_json,
             key = (b['device_class'], m['measure_name'], b.get('zone_id'))
             groups.setdefault(key, {'profile': m['profile'], 'devices': [],
                                     'failure': b.get('sampling', {}).get('failure', 0.0),
-                                    'mode': b.get('sampling', {}).get('mode', 'PERIODIC')})
+                                    'mode': b.get('sampling', {}).get('mode', 'PERIODIC'),
+                                    'decay': bool(b.get('decay'))})
             groups[key]['devices'].append(b['device_id'])
             entries.append((m['field'], m.get('tier_field', 'tier'), key))
         slots[b['device_id']] = entries
@@ -160,7 +170,7 @@ def analyse(events_jsonl, profiles_json,
             line = line.strip()
             if not line: continue
             ev = json.loads(line)
-            if ev.get('event_type') != streamed or ev.get('triggered_by'):
+            if ev.get('event_type') not in streamed or ev.get('triggered_by'):
                 continue
             for field, tier_field, key in slots.get(ev.get('device_id'), ()):
                 v = ev.get(field)
@@ -228,6 +238,7 @@ def analyse(events_jsonl, profiles_json,
             n_devices=len(set(g['devices'])),
             sticky=bool(prof.get('chain')),
             arrival_mode=g['mode'],
+            decaying=g.get('decay', False),
         ))
 
     return results
@@ -264,7 +275,7 @@ def print_report(results: List[MeasureResult]):
                 print(f'  {str(r.zone_id):>4}  {n_txt:>7}  '
                       f'{r.observed_mean:>7.2f} {r.declared_mean:>7.2f}  '
                       f'{r.observed_std:>6.2f} {r.declared_std:>6.2f}  '
-                      f'{D}n/a — {r.arrival_mode} transmits a value-dependent subset{X}')
+                      f'{D}n/a — {r.skip_reason}{X}')
                 continue
             total_pass += r.overall_pass
             total_fail += (not r.overall_pass)
@@ -300,7 +311,7 @@ def print_report(results: List[MeasureResult]):
     print(f'  PASS : {G}{total_pass}{X}  ({100*total_pass//max(n_total,1)}%)')
     print(f'  FAIL : {(R if total_fail else "")}{total_fail}{(X if total_fail else "")}')
     if n_skipped:
-        print(f'  Not checked: {n_skipped} (ON_CHANGE / ON_THRESHOLD arrivals)')
+        print(f'  Not checked: {n_skipped} (ON_CHANGE / ON_THRESHOLD arrivals, DECAY batteries)')
     if any(r.low_power for r in results):
         print(f'  * small sample: ±5 pp is within 2 standard errors of a tier rate, '
               f'so a tier FAIL there can be chance')
@@ -328,6 +339,7 @@ def save_json(results: List[MeasureResult], path: str):
         'overall_pass': r.overall_pass,
         'applicable':   r.applicable,
         'arrival_mode': r.arrival_mode,
+        'decaying': r.decaying,
         'small_sample': r.low_power,
     } for r in results]
     with open(path, 'w') as f:

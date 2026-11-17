@@ -51,11 +51,11 @@ CREATE EVENTSTREAM s ( EVENTTYPE sensor_reading,
 
 CLASSES = """
 CREATE DEVICE_CLASS SoilSensor (
-    MEASURES Moisture UNIT "pct" RANGE (0.0, 100.0) RESOLUTION 0.1,
+    MEASURES VolumeFraction IN percent FOLLOWING Moisture RANGE (0.0, 100.0) RESOLUTION 0.1,
     zone ENUM *
 )
 CREATE DEVICE_CLASS VaneSensor (
-    MEASURES Dir UNIT "deg" RANGE (0.0, 360.0) RESOLUTION 1.0,
+    MEASURES Angle IN degree FOLLOWING Dir RANGE (0.0, 360.0) RESOLUTION 1.0,
     zone ENUM *
 )
 """
@@ -107,13 +107,13 @@ def bindings(prog, data):
 class ParsingTests(unittest.TestCase):
     def test_user_field_any_case(self):
         for decl in ('zone ENUM *', 'ZONE ENUM *', 'Zone ENUM*'):
-            p = parse(f'CREATE DEVICE_CLASS X ( MEASURES M UNIT "u" RANGE (0,1) '
+            p = parse(f'CREATE DEVICE_CLASS X ( MEASURES Count IN count FOLLOWING M RANGE (0,1) '
                       f'RESOLUTION 1, {decl} )')
             self.assertEqual(p.device_classes[0].discriminator, 'zone')
 
     def test_unknown_token_in_device_class_raises_instead_of_hanging(self):
         with self.assertRaises(ParseError):
-            parse('CREATE DEVICE_CLASS X ( MEASURES M UNIT "u" RANGE (0,1) '
+            parse('CREATE DEVICE_CLASS X ( MEASURES Count IN count FOLLOWING M RANGE (0,1) '
                   'RESOLUTION 1, zone )')
 
     def test_where_values_and_unconditional(self):
@@ -135,6 +135,35 @@ class ParsingTests(unittest.TestCase):
 class ValidationTests(unittest.TestCase):
     def test_valid_spec(self):
         self.assertEqual(errors_of(spec()), [])
+
+    def test_schema_needs_a_device_table(self):
+        # Rejected by the validator alone, before any data is loaded
+        tables = TABLES.replace('STRING REFERENCES DEVICE_CLASS', 'STRING')
+        self.assertTrue(any('REFERENCES DEVICE_CLASS' in e
+                            for e in errors_of(spec(tables=tables))))
+
+    def test_only_one_device_table(self):
+        tables = TABLES + ('CREATE TABLE spares ( spare_id STRING PRIMARY KEY, '
+                           'kind STRING REFERENCES DEVICE_CLASS )')
+        self.assertTrue(any('More than one column' in e
+                            for e in errors_of(spec(tables=tables))))
+
+    def test_each_class_gets_its_own_event_type(self):
+        stream = STREAM.replace('EVENTTYPE sensor_reading,',
+                                'EVENTTYPE Moisture_Reading, Dir_Reading,')
+        stream = ('CREATE EVENTTYPE Moisture_Reading ( EVENTTIME T INTEGER, device_id STRING, value FLOAT )\n'
+                  'CREATE EVENTTYPE Dir_Reading ( EVENTTIME T INTEGER, device_id STRING, value FLOAT )\n'
+                  + stream)
+        prog = spec(stream=stream)
+        self.assertEqual(errors_of(prog), [])
+        types = {b['device_id']: b['event_type'] for b in bindings(prog, ROWS)}
+        self.assertEqual(types, {'S1': 'Moisture_Reading', 'S2': 'Moisture_Reading',
+                                 'V3': 'Dir_Reading'})
+
+    def test_device_table_needs_one_primary_key(self):
+        tables = TABLES.replace('device_id STRING PRIMARY KEY', 'device_id STRING')
+        self.assertTrue(any('exactly one PRIMARY KEY' in e
+                            for e in errors_of(spec(tables=tables))))
 
     def test_only_one_user_field(self):
         classes = CLASSES.replace('    zone ENUM *\n)\nCREATE DEVICE_CLASS Vane',

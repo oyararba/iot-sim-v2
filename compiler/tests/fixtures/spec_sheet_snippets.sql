@@ -4,36 +4,39 @@
 
 -- README 6.1
 CREATE DEVICE CLASS SoilMoistureSensor (
-    MEASURES Moisture
-        UNIT        "percent_VWC"
+    MEASURES VolumeFraction
+        IN          "%"
+        FOLLOWING   Moisture
         RANGE       (0.0, 100.0)
         RESOLUTION  0.1,
     zone ENUM *
 )
 CREATE DEVICE CLASS NPKSensor (
-    MEASURES Nitrogen   UNIT "mg_per_kg" RANGE (0.0, 999.0) RESOLUTION 1.0,
-    MEASURES Phosphorus UNIT "mg_per_kg" RANGE (0.0, 999.0) RESOLUTION 1.0,
-    MEASURES Potassium  UNIT "mg_per_kg" RANGE (0.0, 999.0) RESOLUTION 1.0,
+    MEASURES MassFraction IN mg_per_kg FOLLOWING Nitrogen RANGE (0.0, 999.0) RESOLUTION 1.0,
+    MEASURES MassFraction IN mg_per_kg FOLLOWING Phosphorus RANGE (0.0, 999.0) RESOLUTION 1.0,
+    MEASURES MassFraction IN mg_per_kg FOLLOWING Potassium RANGE (0.0, 999.0) RESOLUTION 1.0,
     zone ENUM *
 )
 -- Slides
 CREATE DEVICE CLASS WindSensor (
- MEASURES WindSpeed
- UNIT m_per_s
+ MEASURES Speed
+ IN   m_per_s
+ FOLLOWING WindSpeed
  RANGE (0.0, 60.0)
  RESOLUTION 0.1,
- MEASURES WindDirection
- UNIT degrees
+ MEASURES Angle
+ IN   degree
+ FOLLOWING WindDirection
  RANGE (0.0, 360.0)
  RESOLUTION 1.0,
  zone ENUM *
 )
 CREATE DEVICE CLASS AirTempSensor (
- MEASURES AirTemp UNIT celsius RANGE (-20.0, 60.0) RESOLUTION 0.1,
+ MEASURES Temperature IN celsius FOLLOWING AirTemp RANGE (-20.0, 60.0) RESOLUTION 0.1,
  zone ENUM *
 )
 CREATE DEVICE CLASS RainSensor (
- MEASURES Rainfall UNIT mm_per_hour RANGE (0.0, 300.0) RESOLUTION 0.2,
+ MEASURES PrecipitationRate IN mm_per_hour FOLLOWING Rainfall RANGE (0.0, 300.0) RESOLUTION 0.2,
  zone ENUM *
 )
 CREATE TABLE zones ( zone_id INTEGER PRIMARY KEY, zone_name STRING )

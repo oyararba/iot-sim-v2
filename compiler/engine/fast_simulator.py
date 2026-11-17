@@ -132,7 +132,9 @@ class Slot:
         self.death      = (start + math.ceil(random.expovariate(1.0 / life))
                            if life else None)
 
-    def next_value(self) -> Tuple[float, str]:
+    def next_value(self, spread: float = 1.0) -> Tuple[float, str]:
+        """Next value and its tier. `spread` > 1 widens the draw around the
+        tier's mean (battery DECAY); 1.0 leaves it unchanged."""
         prev = self.cur
         if self.chain_stay is None or prev is None:
             idx = _draw(self.cum)
@@ -157,7 +159,10 @@ class Slot:
             self.offset = 0.0
 
         dist = tier['distribution']
-        v = sample(dist['type'], dist['params']) + self.offset
+        v = sample(dist['type'], dist['params'])
+        if spread != 1.0:
+            v = tier['mean'] + spread * (v - tier['mean'])
+        v += self.offset
         v = min(max(v, self.lo), self.hi)
         if self.res > 0:
             v = round(round(v / self.res) * self.res, self.dec)
@@ -169,7 +174,8 @@ class Slot:
 
 class Device:
     __slots__ = ('device_id', 'event_type', 'slots', 'attrs', 'mode', 'interval',
-                 'threshold', 'failure', 'last_value')
+                 'threshold', 'failure', 'last_value',
+                 'born', 'life', 'noise', 'curve', 'battery_dead')
 
     def __init__(self, binding: Dict, profiles: Dict, ramp_n: int, start: int):
         self.device_id  = binding['device_id']
@@ -183,6 +189,29 @@ class Device:
         self.threshold  = smp.get('threshold') or 0.0
         self.failure    = smp.get('failure') or 0.0
         self.last_value = None
+        # DECAY: this device's battery life, drawn once (in ticks)
+        decay           = binding.get('decay')
+        self.born       = start
+        self.battery_dead = False
+        if decay:
+            lt = decay['lifetime']
+            self.life  = max(1.0, sample(lt['type'], lt['params']) * decay['unit_ticks'])
+            self.noise = decay['noise']
+            self.curve = decay['curve']
+        else:
+            self.life = self.noise = self.curve = None
+
+    def spread(self, tick: int) -> Tuple[float, float]:
+        """(battery fraction left, spread multiplier) at `tick`."""
+        used = min(1.0, (tick - self.born) / self.life)
+        f = self.noise
+        if self.curve == 'QUADRATIC':
+            k = 1.0 + (f - 1.0) * used * used
+        elif self.curve == 'EXPONENTIAL':
+            k = f ** used
+        else:                                   # LINEAR
+            k = 1.0 + (f - 1.0) * used
+        return 1.0 - used, k
 
 
 # -----------------------------------------------------------------------
@@ -356,6 +385,7 @@ class FastSimulator:
             'persistent': 0, 'triggered': 0,
             'dropped_failure': 0, 'dropped_no_change': 0,
             'sensors_failed': 0, 'devices_failed': 0, 'stale': 0,
+            'batteries_dead': 0,
             'triggered_after_end': 0,
         }
         self._emit: Optional[Callable] = None
@@ -414,6 +444,8 @@ class FastSimulator:
         if st['sensors_failed']:
             print(f'  Sensors failed (FAILURE lifetime): {st["sensors_failed"]:,}  '
                   f'Devices stopped: {st["devices_failed"]:,}')
+        if st['batteries_dead']:
+            print(f'  Batteries run down (DECAY): {st["batteries_dead"]:,} devices stopped')
         if st['triggered_after_end']:
             print(f'  Triggered events due after the end (not written): '
                   f'{st["triggered_after_end"]:,}')
@@ -428,6 +460,14 @@ class FastSimulator:
         tiers:  Dict[str, str] = {}
         primary = None
         measure_name = dev.slots[0].measure
+        battery, spread = None, 1.0
+        if dev.life is not None:
+            if tick - dev.born >= dev.life:          # battery empty: device goes silent
+                if not dev.battery_dead:
+                    dev.battery_dead = True
+                    self.stats['batteries_dead'] += 1
+                return                                # not rescheduled
+            battery, spread = dev.spread(tick)
         live = 0
         for slot in dev.slots:
             if slot.death is not None and tick >= slot.death:
@@ -438,7 +478,7 @@ class FastSimulator:
             if slot.death == -1:
                 continue
             live += 1
-            v, tier = slot.next_value()
+            v, tier = slot.next_value(spread)
             values[slot.field] = v
             tiers[slot.tier_field] = tier
             if primary is None:
@@ -489,6 +529,8 @@ class FastSimulator:
             elif attr in dev.attrs and dev.attrs[attr] is not None:
                 ev[attr] = dev.attrs[attr]
         ev.update(tiers)
+        if battery is not None and 'battery' not in ev:
+            ev['battery'] = round(battery, 4)         # ground truth, like `tier`
         self._deliver(ev, tick)
 
     # ------------------------------------------------------------------

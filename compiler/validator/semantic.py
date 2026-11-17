@@ -3,6 +3,10 @@ validator/semantic.py
 
 Semantic validation pass over the AST.
 Checks:
+  0. Measurement ontology — every MEASURES names a quantity and a unit from
+     ontology/measurements.sql, its RANGE is physically possible for that
+     quantity, and measures that follow the same DISTRIBUTION agree on
+     quantity and unit
   1. Device class integrity — each MEASURES references a valid event type
   2. Distribution integrity — measure_name exists in a device class,
      every measure has a DISTRIBUTION, WHERE <field> only on a field every
@@ -12,7 +16,9 @@ Checks:
      ARRIVALS entry, failure 0.0-1.0
   User-defined fields — at most one `<field> ENUM *` per device class
   4. Event type integrity — no duplicate attribute names
-  5. Table integrity — REFERENCES point to existing tables and columns
+  5. Table integrity — REFERENCES point to existing tables and columns, and
+     exactly one table is the device table: one column REFERENCES
+     DEVICE_CLASS, and that table has exactly one PRIMARY KEY
   6. Rule integrity — source event types exist, aggregation vars referenced
 """
 
@@ -21,7 +27,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Set
 
 from ast_nodes.nodes import Program
-from resources.loader import value_key
+from ontology import OntologyError, default_ontology
+from resources.loader import ResourceError, find_device_table, value_key
 from codegen.rules import MEASURE_ATTRS, compile_rule
 
 
@@ -46,6 +53,8 @@ class SemanticValidator:
 
     def validate(self) -> List[ValidationError]:
         self._index_device_classes()
+        self._validate_measures()
+        self._validate_decay()
         self._index_event_types()
         self._index_tables()
         self._validate_distributions()
@@ -83,6 +92,69 @@ class SemanticValidator:
                           f"user-defined fields ({', '.join(dc.user_fields)}); "
                           f"only one '<field> ENUM *' is allowed", dc.line)
 
+    def _validate_measures(self):
+        """Every MEASURES uses the measurement ontology (ontology/measurements.sql)."""
+        onto = default_ontology()
+        follows: Dict[str, tuple] = {}     # distribution name -> (quantity, unit, class)
+        for dc in self.prog.device_classes:
+            for m in dc.measures:
+                where = f"DEVICE_CLASS '{dc.name}' MEASURES {m.quantity}"
+                try:
+                    q, u = onto.resolve(m.quantity, m.unit)
+                except OntologyError as e:
+                    self._err(f'{where}: {e}', m.line or dc.line)
+                    continue
+                if m.range_min > m.range_max:
+                    self._err(f'{where}: RANGE ({m.range_min:g}, {m.range_max:g}) has '
+                              f'min > max', m.line or dc.line)
+                else:
+                    why = onto.check_range(q.name, u.name, m.range_min, m.range_max)
+                    if why:
+                        self._err(f'{where}: {why}', m.line or dc.line)
+                if m.resolution <= 0:
+                    self._err(f'{where}: RESOLUTION must be > 0', m.line or dc.line)
+                prev = follows.get(m.name)
+                if prev and (prev[0], prev[1]) != (q.name, u.name):
+                    self._err(f"{where}: follows DISTRIBUTION {m.name} in {u.name}, but "
+                              f"DEVICE_CLASS '{prev[2]}' follows it as {prev[0]} in "
+                              f"{prev[1]}; a distribution's parameters have one quantity "
+                              f"and one unit", m.line or dc.line)
+                follows.setdefault(m.name, (q.name, u.name, dc.name))
+
+    _DECAY_PARAMS = {'NORMAL': ('mean', 'std_dev'), 'UNIFORM': ('low', 'high'),
+                     'EXPONENTIAL': ('mean',)}
+
+    def _validate_decay(self):
+        """DECAY: a battery life distribution that gives positive lifetimes,
+        and a NOISE factor of at least 1 (the spread only grows)."""
+        for dc in self.prog.device_classes:
+            d = dc.decay
+            if d is None:
+                continue
+            where = f"DEVICE_CLASS '{dc.name}' DECAY"
+            spec = d.lifetime
+            need = self._DECAY_PARAMS.get(spec.dist_type)
+            if need is None:
+                self._err(f"{where}: battery life can follow NORMAL, UNIFORM or "
+                          f"EXPONENTIAL, not {spec.dist_type}", d.line or dc.line)
+            else:
+                missing = [k for k in need if k not in spec.params]
+                if missing:
+                    self._err(f"{where}: {spec.dist_type} needs {', '.join(need)}",
+                              d.line or dc.line)
+                else:
+                    p = spec.params
+                    bad = (spec.dist_type in ('NORMAL', 'EXPONENTIAL') and p['mean'] <= 0
+                           or spec.dist_type == 'NORMAL' and p['std_dev'] < 0
+                           or spec.dist_type == 'UNIFORM'
+                           and not (0 <= p['low'] <= p['high'] and p['high'] > 0))
+                    if bad:
+                        self._err(f"{where}: battery life must be positive "
+                                  f"({spec.dist_type} {p})", d.line or dc.line)
+            if d.noise < 1:
+                self._err(f"{where}: NOISE {d.noise:g} must be >= 1 (the spread of "
+                          f"readings grows as the battery drains)", d.line or dc.line)
+
     def _index_event_types(self):
         for et in self.prog.event_types:
             if et.name in self._event_types:
@@ -114,7 +186,7 @@ class SemanticValidator:
             # Measure must exist in some device class
             if mn not in self._all_measures:
                 self._err(f"DISTRIBUTION FOR '{mn}': no DEVICE_CLASS declares "
-                          f"MEASURES {mn}")
+                          f"a measure FOLLOWING {mn}")
 
             # Check for duplicate distributions for same measure
             if mn in declared_measures:
@@ -151,7 +223,7 @@ class SemanticValidator:
         for dc in self.prog.device_classes:
             for m in dc.measures:
                 if m.name not in declared_measures:
-                    self._err(f"DEVICE_CLASS '{dc.name}' MEASURES {m.name} has no "
+                    self._err(f"DEVICE_CLASS '{dc.name}' measure {m.name} has no "
                               f"DISTRIBUTION FOR {m.name}", dc.line)
 
     def _validate_where_fields(self, dist):
@@ -281,14 +353,24 @@ class SemanticValidator:
         for dc in self.prog.device_classes:
             for m in dc.measures:
                 if m.name not in arrivals:
-                    self._err(f"DEVICE_CLASS '{dc.name}' MEASURES {m.name} has no "
+                    self._err(f"DEVICE_CLASS '{dc.name}' measure {m.name} has no "
                               f"ARRIVALS entry in any EVENTSTREAM", dc.line)
 
     # ------------------------------------------------------------------
     # Table validation
     # ------------------------------------------------------------------
 
+    def _validate_device_table(self):
+        """Exactly one device table, checked on the schema alone (the loader
+        applies the same function when it reads the data)."""
+        try:
+            find_device_table(self.prog.tables)
+        except ResourceError as e:
+            for msg in e.errors:
+                self._err(msg)
+
     def _validate_tables(self):
+        self._validate_device_table()
         for tbl in self.prog.tables:
             for col in tbl.columns:
                 if col.references:

@@ -24,11 +24,30 @@ class ASTNode:
 
 @dataclass
 class MeasuresDef(ASTNode):
-    name:       str          # e.g. "Moisture"
-    unit:       str          # e.g. "percent_VWC"
-    range_min:  float        # physical minimum
-    range_max:  float        # physical maximum
-    resolution: float        # smallest detectable change
+    # MEASURES <quantity> [IN <unit>] [FOLLOWING <distribution>]
+    name:       str          # the distribution it follows (FOLLOWING), e.g. "AirTemp";
+                             # the quantity's name when FOLLOWING is left out. ARRIVALS,
+                             # DISTRIBUTION FOR and rules refer to the measure by this name.
+    quantity:   str          # ontology quantity, e.g. "Temperature" (ontology/measurements.sql)
+    unit:       Optional[str]  # ontology unit, e.g. "celsius"; None = the quantity's default
+    range_min:  float        # physical minimum, in that unit
+    range_max:  float        # physical maximum, in that unit
+    resolution: float        # smallest detectable change, in that unit
+    line:       int = 0
+
+
+@dataclass
+class DecayDef(ASTNode):
+    # DECAY OVER <dist> (<params>) <unit> NOISE <factor> [CURVE <curve>]
+    # Battery drain: each device draws its battery life from `lifetime`
+    # (in `unit_ms` units); the spread of its readings around the tier mean
+    # grows from 1x to `noise`x along `curve`, and the device goes silent
+    # when the battery is empty.
+    lifetime: 'DistributionSpec'
+    unit_ms:  float
+    noise:    float
+    curve:    str = 'LINEAR'       # LINEAR | QUADRATIC | EXPONENTIAL
+    line:     int = 0
 
 
 @dataclass
@@ -42,6 +61,7 @@ class DeviceClassNode(ASTNode):
     # enterprise DB tables. Names are stored lower-case.
     user_fields: List[str] = field(default_factory=list)
     line:        int = 0
+    decay:       Optional[DecayDef] = None     # battery drain (DECAY clause)
 
     @property
     def discriminator(self) -> Optional[str]:

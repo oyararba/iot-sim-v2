@@ -192,6 +192,7 @@ No output files are written. The exit code is 0 on success and 1 on any error.
 | `--sticky-ramp N` | `5` | Readings over which the mean moves when entering or leaving a `STICKY` tier |
 | `--verbose N` | `0` | Print progress every N ticks |
 | `--validate-only` | off | Check and stop |
+| `--list-quantities` | off | Print the measurement ontology (every quantity `MEASURES` accepts, with its units) and stop |
 
 Two of these deserve care:
 
@@ -218,6 +219,7 @@ Two of these deserve care:
 | `Dropped (no change)` | Samples that `ON_CHANGE` or `ON_THRESHOLD` sensors took but had no reason to transmit |
 | `Triggered events due after the end (not written)` | Rule results whose fire time fell past `--sim-end`. Expected for windows that close at the very end. |
 | `Stale`, `Sensors failed` | Shown only when the schema uses `INGESTTIME` or a `FAILURE <duration>` sensor lifetime |
+| `Batteries run down (DECAY)` | Shown only when a device class has `DECAY`: devices whose battery emptied and that stopped transmitting |
 
 ### events.jsonl
 
@@ -239,8 +241,9 @@ One event per line, ordered by `event_time`. A sensor reading:
 | `depth_cm` and similar | Copied from the device's row, for every event attribute named like a device-table column |
 | `tier`, `tier2`, `tier3` | Which part of the distribution each value was drawn from: `NORMAL`, `ABOVE` (anomalously high) or `BELOW` (anomalously low) |
 | `ingest_time`, `stale` | Only when the event type declares `INGESTTIME`: arrival time in ticks, and whether it exceeded `MAXDELAY` |
+| `battery` | Only for a device class with `DECAY`: the fraction of battery left, from 1.0 down to 0.0. The lower it is, the noisier the reading. |
 
-The `tier` fields are ground truth added by the simulator; a real sensor would not send them. They let you check whether a system under test caught an anomaly. Remove them before replaying the stream into such a system.
+The `tier` and `battery` fields are ground truth added by the simulator; a real sensor would not send them. They let you check whether a system under test caught an anomaly. Remove them before replaying the stream into such a system.
 
 A rule-produced event:
 
@@ -275,8 +278,8 @@ The compiled model. You do not need it to use the events, but it answers "why di
 |---|---|
 | `simulation` | Start and end tick, milliseconds per tick, seed, `STICKY` settings |
 | `stream`, `event_types` | The attributes each event type carries |
-| `profiles` | One statistical model per device class, measure and zone, named like `SoilMoistureSensor_Moisture_zone1`: the tiers with their distributions and probabilities, valid range, resolution |
-| `bindings` | One entry per device: its zone, the profile each measure uses, which `value` field it fills, how often it transmits, and its failure probability |
+| `profiles` | One statistical model per device class, measure and zone, named like `SoilMoistureSensor_Moisture_zone1`: the tiers with their distributions and probabilities, valid range, resolution, and the measure's quantity, unit and conversion to SI (`to_si`) |
+| `bindings` | One entry per device: its zone, the profile each measure uses, which `value` field it fills, how often it transmits, its failure probability, and its `DECAY` battery if the class has one |
 | `rules` | The compiled rules |
 
 ## Checking that the output is statistically right
@@ -316,12 +319,12 @@ The expected standard deviation is that of the mixture, not of the `NORMAL` tier
 
 How much to expect: with a short run, sensors that report once a day have only a handful of readings, so their rows fail by chance. In the 7-day quick start 24 of 39 groups pass, and nearly every failure is starred. In a 90-day run 36 to 38 of 39 pass depending on the seed. The groups that fail are low-count ones (daily NPK sensors) or ones dominated by a rare tier (rainfall), and they change from seed to seed. A `Rng` failure, or the same group failing across seeds, would indicate a real problem.
 
-Measures sent `ON_CHANGE` or `ON_THRESHOLD` are listed but not checked, because those modes transmit only a value-dependent subset of readings.
+Measures sent `ON_CHANGE` or `ON_THRESHOLD` are listed but not checked, because those modes transmit only a value-dependent subset of readings. Device classes with `DECAY` are listed but not checked either: their spread widens on purpose as the battery drains.
 
 ## Tests and benchmarks
 
 ```bash
-python3 -m unittest discover -s tests        # 55 tests, about 2 seconds
+python3 -m unittest discover -s tests        # 87 tests, about 3 seconds
 ```
 
 ```bash
@@ -353,6 +356,10 @@ Run time grows linearly with the number of devices (scaling exponent 1.02). Outp
 | `column(s) … are declared in CREATE TABLE but missing from …` | The database lacks a column the schema declares. Remove it from the schema or add it to the database. |
 | `window of 1800 s is shorter than one tick` | `--tick-unit` is too coarse for a rule window. Use a smaller unit. |
 | `WARN: ARRIVALS X: interval is … ticks; using 1` | `--tick-unit` is coarser than a sensor's interval, so the sensor is slowed to one reading per tick. Use a smaller unit. |
+| `MEASURES X UNIT ... is the old form` | `MEASURES` now names a quantity from the measurement ontology. Write `MEASURES <quantity> IN <unit> FOLLOWING X`, e.g. `MEASURES Temperature IN celsius FOLLOWING AirTemp`. `--list-quantities` shows the choices. |
+| `'X' is not a quantity in the measurement ontology` | Use a quantity from `--list-quantities` (soil moisture is `VolumeFraction`, gas concentration is `AmountFraction`), or add a row to `compiler/ontology/measurements.sql`. |
+| `'u' is not a unit of Q` | The unit belongs to another quantity. The message lists the units `Q` accepts. |
+| `No CREATE TABLE has a column declared REFERENCES DEVICE_CLASS` | The schema has no device table. Exactly one table needs a `device_class STRING REFERENCES DEVICE_CLASS` column and one `PRIMARY KEY`. |
 | Two runs give different events | No `--seed` was given. |
 | `ModuleNotFoundError: No module named 'eval'` | Run the analyser from `compiler/`. |
 
@@ -368,6 +375,7 @@ compiler/
 ├── compiler.py            command-line entry point
 ├── lexer/ parser/ ast_nodes/   schema and rules → syntax tree
 ├── validator/             semantic checks
+├── ontology/              measurement ontology: the quantities and units MEASURES may use
 ├── resources/             reads --db / --devices and resolves each device's zone
 ├── codegen/               binds devices to distributions, compiles rules, writes profiles.json
 ├── engine/
@@ -382,7 +390,7 @@ compiler/
 
 ## Further reading
 
-- [docs/REFERENCE.md](docs/REFERENCE.md): the full language (`CREATE DEVICE CLASS`, `CREATE EVENTTYPE`, `CREATE EVENTSTREAM`, `DISTRIBUTION FOR`, rules), how values are generated, exact rule semantics, and how to tune tier probabilities to debug rules.
+- [docs/REFERENCE.md](docs/REFERENCE.md): the full language (`CREATE DEVICE CLASS` with the measurement ontology and battery `DECAY`, `CREATE EVENTTYPE`, `CREATE EVENTSTREAM`, `DISTRIBUTION FOR`, rules), how values are generated, exact rule semantics, and how to tune tier probabilities to debug rules.
 - [SPEC_CONFORMANCE.md](SPEC_CONFORMANCE.md): the interpretation taken wherever the spec was silent.
 
 ## License

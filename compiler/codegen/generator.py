@@ -36,6 +36,7 @@ from ast_nodes.nodes import (
 )
 from resources.loader import Resources, ResourceError, value_key
 from codegen.rules import MEASURE_ATTRS, compile_rule, event_attributes
+from ontology import default_ontology
 
 VALUE_FIELDS = ['value', 'value2', 'value3']
 TIER_FIELDS  = ['tier', 'tier2', 'tier3']
@@ -216,7 +217,7 @@ class CodeGenerator:
         profile: Dict[str, Any] = {
             'event_type':    self._find_event_type(dc_name),
             'measure_name':  measure.name,
-            'unit':          measure.unit,
+            **self._quantity_info(measure),
             'valid_range':   {'min': measure.range_min, 'max': measure.range_max},
             'resolution':    measure.resolution,
             'discriminator': where_block.field,     # e.g. 'zone'; None = applies to all
@@ -236,6 +237,30 @@ class CodeGenerator:
         if arrival:
             profile['sampling'] = self._sampling(arrival)
         return profile
+
+    def _decay(self, dc: DeviceClassNode) -> Optional[Dict[str, Any]]:
+        """The class's DECAY clause for the engine: battery life distribution
+        (sampled per device, in ticks = value x unit_ticks), noise factor, curve."""
+        d = dc.decay
+        if d is None:
+            return None
+        return {'lifetime':   self._dist_to_dict(d.lifetime),
+                'unit_ticks': self._ticks(d.unit_ms),
+                'noise':      d.noise,
+                'curve':      d.curve}
+
+    @staticmethod
+    def _quantity_info(measure: Any) -> Dict[str, Any]:
+        """The measure's ontology quantity and unit, with the conversion to SI."""
+        q, u = default_ontology().resolve(measure.quantity, measure.unit)
+        return {
+            'quantity':    q.name,
+            'dimension':   q.dimension,
+            'unit':        u.name,
+            'unit_symbol': u.symbol,
+            'si_unit':     q.si_unit,
+            'to_si':       {'scale': u.scale, 'offset': u.offset},
+        }
 
     def _sampling(self, arrival: ArrivalSpec) -> Dict[str, Any]:
         interval_ticks = None
@@ -389,6 +414,7 @@ class CodeGenerator:
                 'zone_id':       field_value,     # the device's field value (e.g. its zone)
                 'measures':      measures,
                 'sampling':      self._sampling(first),
+                'decay':         self._decay(dc),
                 'attrs':         self._event_attrs(dc.name, dev),
             })
 

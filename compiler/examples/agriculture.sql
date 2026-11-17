@@ -3,24 +3,24 @@
 -- ═══════════════════════════════════════════════
 
 CREATE DEVICE_CLASS SoilMoistureSensor (
-    MEASURES    Moisture       UNIT  "percent_VWC"   RANGE (0.0, 100.0)   RESOLUTION 0.1,
+    MEASURES    VolumeFraction   IN percent   FOLLOWING Moisture   RANGE (0.0, 100.0)  RESOLUTION 0.1,
     ZONE        ENUM *
 )
 
 CREATE DEVICE_CLASS AirTemperatureSensor (
-    MEASURES    AirTemp        UNIT  "celsius"        RANGE (-20.0, 60.0)  RESOLUTION 0.1,
+    MEASURES    Temperature      IN celsius   FOLLOWING AirTemp    RANGE (-20.0, 60.0) RESOLUTION 0.1,
     ZONE        ENUM *
 )
 
 CREATE DEVICE_CLASS HumiditySensor (
-    MEASURES    Humidity       UNIT  "percent_RH"     RANGE (0.0, 100.0)   RESOLUTION 0.5,
+    MEASURES    RelativeHumidity IN percent   FOLLOWING Humidity   RANGE (0.0, 100.0)  RESOLUTION 0.5,
     ZONE        ENUM *
 )
 
 CREATE DEVICE_CLASS NPKSensor (
-    MEASURES    Nitrogen       UNIT  "mg_per_kg"      RANGE (0.0, 999.0)   RESOLUTION 1.0,
-    MEASURES    Phosphorus     UNIT  "mg_per_kg"      RANGE (0.0, 999.0)   RESOLUTION 1.0,
-    MEASURES    Potassium      UNIT  "mg_per_kg"      RANGE (0.0, 999.0)   RESOLUTION 1.0,
+    MEASURES    MassFraction     IN mg_per_kg FOLLOWING Nitrogen   RANGE (0.0, 999.0)  RESOLUTION 1.0,
+    MEASURES    MassFraction     IN mg_per_kg FOLLOWING Phosphorus RANGE (0.0, 999.0)  RESOLUTION 1.0,
+    MEASURES    MassFraction     IN mg_per_kg FOLLOWING Potassium  RANGE (0.0, 999.0)  RESOLUTION 1.0,
     ZONE        ENUM *
 )
 

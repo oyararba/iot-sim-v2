@@ -35,7 +35,10 @@ class TT(Enum):
 
     # Keywords — DEVICE_CLASS body
     MEASURES      = auto()
-    UNIT          = auto()
+    IN            = auto()      # MEASURES <quantity> IN <unit>
+    FOLLOWING     = auto()      # ... FOLLOWING <distribution>
+    UNIT          = auto()      # old form, rejected with a hint
+    DECAY         = auto()      # DECAY OVER <dist> <unit> NOISE <f> [CURVE ...]
     RANGE         = auto()
     RESOLUTION    = auto()
     ZONE          = auto()
@@ -163,7 +166,10 @@ KEYWORDS: dict[str, TT] = {
     'FOR':          TT.FOR,
 
     'MEASURES':     TT.MEASURES,
+    'IN':           TT.IN,
+    'FOLLOWING':    TT.FOLLOWING,
     'UNIT':         TT.UNIT,
+    'DECAY':        TT.DECAY,
     'RANGE':        TT.RANGE,
     'RESOLUTION':   TT.RESOLUTION,
     'ZONE':         TT.ZONE,

@@ -229,6 +229,10 @@ def _find_device_table(tables: List[TableNode]) -> Tuple[TableNode, str, str]:
     return table, pks[0], class_col.name
 
 
+# The validator runs the same check on the schema alone (no data needed).
+find_device_table = _find_device_table
+
+
 def find_field_path(field_name: str, tables: List[TableNode],
                     device_table: str) -> FieldPath:
     """

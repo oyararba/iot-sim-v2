@@ -120,32 +120,84 @@ IoTSim schemas are written in a SQL-like declarative syntax. A schema file (`.sq
 
 ### 6.1 CREATE DEVICE CLASS
 
-Describes physical hardware — what it measures, units, range, and resolution. Says nothing about where the device is deployed, how it samples, or what values it produces statistically.
+Describes physical hardware: which physical quantity it measures, in which unit, over what range and at what resolution. Says nothing about where the device is deployed or how it samples.
 
-`zone ENUM *` declares the class's **user-defined field** (any name, any case; one per class). It is the distribution discriminator: each device's value for it is read from the enterprise DB (see [6.6](#66-create-table-and-resources-the-enterprise-db)), and selects the matching `WHERE zone = <value>` block of every `DISTRIBUTION FOR` one of the class's measures. A device whose value has no matching block is a compile error.
+```
+CREATE DEVICE CLASS <class name> (
+    MEASURES <quantity> [IN <unit>] [FOLLOWING <distribution>]
+        RANGE (<min>, <max>)
+        RESOLUTION <step>,
+    ...                                  -- up to three MEASURES
+    <field> ENUM *
+)
+```
+
+**MEASURES is not free text.** `<quantity>` must be a quantity from the measurement ontology (`ontology/measurements.sql`) and `<unit>` one of that quantity's units. The ontology is a pair of SQL tables, `quantity` (name, SI dimension, SI unit, physical bounds) and `unit` (name, symbol, conversion to SI), loaded into SQLite at compile time. `python3 compiler.py --list-quantities` prints it. Names match ignoring case and underscores; a unit may also be written as its quoted symbol (`IN "°C"`).
+
+| Clause | Meaning | Default |
+|---|---|---|
+| `MEASURES <quantity>` | The physical quantity (Temperature, Pressure, AmountFraction, …) | required |
+| `IN <unit>` | The unit readings, RANGE, RESOLUTION and the distribution's parameters are in | the quantity's default unit (kelvin for Temperature) |
+| `FOLLOWING <distribution>` | The `DISTRIBUTION FOR` this measure samples from. `ARRIVALS` and rules refer to the measure by this name | the quantity's name |
+
+The compiler rejects an unknown quantity (and suggests the closest), a unit that belongs to a different quantity, a `RANGE` outside the quantity's physical bounds (below absolute zero, a fraction above 100 %, a negative concentration), and two measures that follow the same distribution in different quantities or units. The old form `MEASURES AirTemp UNIT celsius` is a parse error that shows the new form.
+
+`<field> ENUM *` declares the class's **user-defined field** (any name, any case; one per class). It is the distribution discriminator: each device's value for it is read from the enterprise DB (see [6.6](#66-create-table-and-resources-the-enterprise-db)), and selects the matching `WHERE <field> = <value>` block of every distribution the class's measures follow. A device whose value has no matching block is a compile error.
 
 ```sql
 CREATE DEVICE CLASS SoilMoistureSensor (
-    MEASURES Moisture
-        UNIT        "percent_VWC"
-        RANGE       (0.0, 100.0)
-        RESOLUTION  0.1,
+    MEASURES    VolumeFraction
+    IN          percent
+    FOLLOWING   Moisture
+    RANGE       (0.0, 100.0)
+    RESOLUTION  0.1,
+    zone        ENUM *
+)
+
+-- Two classes, one quantity, two behaviours
+CREATE DEVICE CLASS AirTemperatureSensor (
+    MEASURES Temperature IN celsius FOLLOWING AirTemp  RANGE (-20.0, 60.0) RESOLUTION 0.1,
+    zone ENUM *
+)
+CREATE DEVICE CLASS SoilTemperatureSensor (
+    MEASURES Temperature IN celsius FOLLOWING SoilTemp RANGE (-10.0, 80.0) RESOLUTION 0.1,
     zone ENUM *
 )
 
 -- Multi-measure sensor
 CREATE DEVICE CLASS NPKSensor (
-    MEASURES Nitrogen   UNIT "mg_per_kg" RANGE (0.0, 999.0) RESOLUTION 1.0,
-
-    MEASURES Phosphorus UNIT "mg_per_kg" RANGE (0.0, 999.0) RESOLUTION 1.0,
-
-    MEASURES Potassium  UNIT "mg_per_kg" RANGE (0.0, 999.0) RESOLUTION 1.0,
-
+    MEASURES MassFraction IN mg_per_kg FOLLOWING Nitrogen   RANGE (0.0, 999.0) RESOLUTION 1.0,
+    MEASURES MassFraction IN mg_per_kg FOLLOWING Phosphorus RANGE (0.0, 999.0) RESOLUTION 1.0,
+    MEASURES MassFraction IN mg_per_kg FOLLOWING Potassium  RANGE (0.0, 999.0) RESOLUTION 1.0,
     zone ENUM *
 )
 ```
 
-`CREATE DEVICE CLASS` and `CREATE DEVICE_CLASS` are both accepted, and `UNIT` may be quoted or bare (`UNIT percent_VWC`).
+`CREATE DEVICE CLASS` and `CREATE DEVICE_CLASS` are both accepted. Each profile in `profiles.json` carries the measure's `quantity`, `unit`, `unit_symbol`, `si_unit` and `to_si` (`si = value × scale + offset`), so downstream tools can convert readings to SI.
+
+**DECAY (battery drain).** A device class may add one clause:
+
+```
+DECAY OVER <NORMAL | UNIFORM | EXPONENTIAL> (<params>) <time unit> NOISE <factor> [CURVE LINEAR | QUADRATIC | EXPONENTIAL]
+```
+
+```sql
+CREATE DEVICE CLASS Ammonia_Sensor (
+    MEASURES AmountFraction IN ppm FOLLOWING Ammonia RANGE (0.0, 50.0) RESOLUTION 0.1,
+    DECAY OVER NORMAL (mean = 180, std_dev = 20) DAYS NOISE 4.0 CURVE EXPONENTIAL,
+    zone ENUM *
+)
+```
+
+Each device draws its own battery life from the `OVER` distribution once, at the start of the run (fresh batteries at time 0). As the battery drains, every draw is widened around its tier's mean by a factor *k* that grows from 1 to `NOISE` (*u* = fraction of the battery used):
+
+| CURVE | k(u) | Shape |
+|---|---|---|
+| `LINEAR` (default) | 1 + (NOISE − 1)·u | steady degradation |
+| `QUADRATIC` | 1 + (NOISE − 1)·u² | holds up, then worsens near the end |
+| `EXPONENTIAL` | NOISE^u | multiplicative growth |
+
+The tier mixture and the means are unchanged; only the spread grows (values are still clamped to `RANGE`). When the battery is empty the device stops transmitting. Readings of a decaying device carry `battery` (fraction left, 1.0 → 0.0) as ground truth, like `tier`; the correctness analyser reports these groups as not checked. `DECAY` is per device and covers all its measures; `FAILURE <duration>` in a `DISTRIBUTION` is a separate, sudden, per-measure failure, and whichever comes first wins.
 
 **Multi-measure sensors** store readings in order: `value` = first measure, `value2` = second, `value3` = third. A multi-measure device sends one reading per transmission with all of its measures; the reading's timing, arrival mode and `FAILURE` come from the first measure's `ARRIVALS` entry.
 
@@ -184,7 +236,7 @@ The foreign key may also be written without the colon or as `FOREIGNKEY` (`devic
 
 **INGESTTIME / MAXDELAY** — models the delay between sensor emission time (`EVENTTIME`) and engine ingestion time. `MAXDELAY 5 MIN` means events arriving more than 5 minutes late are flagged as stale. Each reading gets `ingest_time = event_time + delay` with delay ~ Exponential(mean = MAXDELAY / 2), so about 13.5% of readings arrive stale (`"stale": true`).
 
-**What a reading looks like.** A reading carries exactly the attributes its `EVENTTYPE` declares, in declared order: `device_id`, the measure name in `measure_type`, the values in `value` / `value2` / `value3`, and any attribute whose name matches a column of the device table (`depth_cm`, `device_class`). Values are omitted when absent (no `value2` on a single-measure device). The engine adds `event_type`, `event_time`, `ingest_time` / `stale` when declared, and the tier of each value (`tier`, `tier2`, `tier3`) for the correctness analyser:
+**What a reading looks like.** A reading carries exactly the attributes its `EVENTTYPE` declares, in declared order: `device_id`, the measure name in `measure_type`, the values in `value` / `value2` / `value3`, and any attribute whose name matches a column of the device table (`depth_cm`, `device_class`). Values are omitted when absent (no `value2` on a single-measure device). The engine adds `event_type`, `event_time`, `ingest_time` / `stale` when declared, the tier of each value (`tier`, `tier2`, `tier3`) for the correctness analyser, and `battery` (fraction left) for a device class with `DECAY`:
 
 ```json
 {"event_type": "sensor_reading", "event_time": 1440, "device_id": "NPK_N1",
@@ -237,7 +289,7 @@ Tiers can be written in any order (the NORMAL tier is the one without a label), 
 - The tier becomes a per-device Markov chain. A STICKY tier holds for the next reading with probability 0.9 (`--sticky-persistence`); otherwise the next tier is redrawn with weights chosen so the long-run tier frequencies still equal the declared `PROB` values.
 - When the tier changes into or out of a STICKY tier, the mean moves from the old tier to the new one over 5 readings (`--sticky-ramp`) instead of jumping.
 
-**FAILURE `<duration>`** inside a `DISTRIBUTION` (`FAILURE 360 DAYS`, as on the slides) is the sensor's mean lifetime: each device's sensor for that measure fails at an exponentially distributed time with that mean and is not reported afterwards; a device whose sensors have all failed stops transmitting. (The per-reading drop probability is `FAILURE p` in `ARRIVALS`.)
+**FAILURE `<duration>`** inside a `DISTRIBUTION` (`FAILURE 360 DAYS`, as on the slides) is the sensor's mean lifetime: each device's sensor for that measure fails at an exponentially distributed time with that mean and is not reported afterwards; a device whose sensors have all failed stops transmitting. (The per-reading drop probability is `FAILURE p` in `ARRIVALS`; a gradual decline is `DECAY` on the device class, §6.1.)
 
 A zero spread is a point mass: `NORMAL (mean = 0.0, std_dev = 0.0)` and `UNIFORM (low = 0, high = 0)` always give 0.
 
@@ -366,7 +418,7 @@ How the compiler reads them:
 
 | What | Where it comes from |
 |---|---|
-| The device table | The one table with a column declared `REFERENCES DEVICE_CLASS` |
+| The device table | The one table with a column declared `REFERENCES DEVICE_CLASS`. Required: a schema with none, with two, or whose device table has no single `PRIMARY KEY` is rejected by the validator, before any data is read |
 | A device's id | That table's `PRIMARY KEY` |
 | A device's class | The `REFERENCES DEVICE_CLASS` column; must name a declared `DEVICE_CLASS` |
 | A user-defined field (`zone ENUM *`) | The nearest column named `zone` or `zone_id`, found by following `REFERENCES` out of the device table. Above: `devices.plot_id → plots.zone_id`. An exact name beats the `_id` form; two equally close candidates are an error. |
@@ -407,6 +459,7 @@ python3 compiler.py [OPTIONS]
 
 Options:
   --schema      PATH   Path to .sql schema file                    [required]
+  --list-quantities    Print the measurement ontology (quantities, units) and exit
   --rules       PATH   Path to .iotdl rules file                   [optional]
   --db          PATH   Enterprise DB (SQLite) with the declared tables
   --devices     PATH   Or: the same tables as JSON {"table": [rows]}
@@ -429,7 +482,7 @@ Options:
 
 | File | Description |
 |---|---|
-| `out/profiles.json` | Compiled profiles: device bindings, parameter models, rules, stream config |
+| `out/profiles.json` | Compiled profiles: device bindings (with any `DECAY` battery), parameter models (with each measure's quantity, unit and SI conversion), rules, stream config |
 | `out/events.jsonl` | Simulation output — one JSON object per event, newline-delimited |
 | `out/correctness.json` | Correctness analysis results (if analyser is run) |
 | `out/benchmark.json` | Benchmark sweep results (if benchmark runner is used) |
@@ -446,12 +499,12 @@ The engine maintains a min-heap of scheduled device fire times, tumbling-window 
 
 For each emission, and for each of the device's measures:
 1. Select the NORMAL, ABOVE or BELOW tier: an independent roll against the declared probabilities, or a step of the STICKY Markov chain (6.4).
-2. Sample from that tier's statistical distribution (shifted while a STICKY transition is ramping).
+2. Sample from that tier's statistical distribution (shifted while a STICKY transition is ramping; widened around the tier mean by the battery's spread factor when the class has `DECAY`).
 3. Clamp to the declared RANGE from the device class.
 4. Round to the declared RESOLUTION.
 5. Tag the tier name on the event (`tier`, `tier2`, `tier3`; used by the correctness analyser).
 
-A measure whose sensor has passed its `FAILURE <duration>` lifetime is left out. The reading is then dropped with the `ARRIVALS` `FAILURE` probability, and given an ingest time when the event type declares `INGESTTIME`.
+A device whose `DECAY` battery is empty stops transmitting. A measure whose sensor has passed its `FAILURE <duration>` lifetime is left out. The reading is then dropped with the `ARRIVALS` `FAILURE` probability, and given an ingest time when the event type declares `INGESTTIME`.
 
 ### 8.3 Rule Engine
 
@@ -496,7 +549,7 @@ print_report(results)
 save_json(results, 'out/correctness.json')
 ```
 
-Values are pooled over every device of a (device class, measure, zone). **Multi-measure sensors:** the analyser reads `value`, `value2`, `value3` in the device class's MEASURES order, taken from the compiled bindings. Mixture statistics use each tier's own distribution (NORMAL, UNIFORM, EXPONENTIAL, POISSON, BINOMIAL). Measures transmitted `ON_CHANGE` / `ON_THRESHOLD` are reported but not checked, because those modes transmit a value-dependent subset of readings. Groups marked `*` have too few readings for the ±5 pp tier check to be meaningful.
+Values are pooled over every device of a (device class, measure, zone). **Multi-measure sensors:** the analyser reads `value`, `value2`, `value3` in the device class's MEASURES order, taken from the compiled bindings. Mixture statistics use each tier's own distribution (NORMAL, UNIFORM, EXPONENTIAL, POISSON, BINOMIAL). Measures transmitted `ON_CHANGE` / `ON_THRESHOLD` are reported but not checked, because those modes transmit a value-dependent subset of readings; so are device classes with a `DECAY` battery, whose spread widens on purpose. Groups marked `*` have too few readings for the ±5 pp tier check to be meaningful.
 
 ### 9.2 Mixture Statistics
 
@@ -677,6 +730,9 @@ compiler/
 │                                # - distribution parameter completeness
 │                                # - referential integrity
 │                                # - measure name existence
+├── ontology/
+│   ├── measurements.sql         # Measurement ontology: quantity + unit tables
+│   └── __init__.py              # Loads it into SQLite; MEASURES / IN lookups
 ├── resources/loader.py          # Enterprise DB (--db / --devices) reader
 │                                # - device → plot → zone resolution
 ├── codegen/

@@ -58,7 +58,7 @@ def report_resource_errors(exc: ResourceError, stage: str):
 
 def build_arg_parser():
     p = argparse.ArgumentParser(description='IoT Schema Compiler & Simulator')
-    p.add_argument('--schema',    required=True, help='Schema file (.sql)')
+    p.add_argument('--schema',    required=False, default=None, help='Schema file (.sql)')
     p.add_argument('--rules',     required=False, default=None,
                    help='IoTDL rules file (.iotdl)')
     p.add_argument('--db',        required=False, default=None,
@@ -90,11 +90,21 @@ def build_arg_parser():
                    help='Print progress every N ticks')
     p.add_argument('--validate-only', action='store_true',
                    help='Run validation only, do not simulate')
+    p.add_argument('--list-quantities', action='store_true',
+                   help='Print the measurement ontology (quantities and their units) '
+                        'and exit')
     return p
 
 
 def main():
-    args    = build_arg_parser().parse_args()
+    ap      = build_arg_parser()
+    args    = ap.parse_args()
+    if args.list_quantities:
+        from ontology import default_ontology
+        print(default_ontology().describe())
+        return
+    if not args.schema:
+        ap.error('--schema is required')
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 

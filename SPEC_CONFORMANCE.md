@@ -16,7 +16,7 @@ python -m unittest discover -s tests -v
 | Spec sheet | Before | Now | Test |
 |---|---|---|---|
 | `CREATE DEVICE CLASS` (two words, README §6.1 and slides) | Parse error; only `DEVICE_CLASS` | Both forms | `SpecSheetSyntaxTests` |
-| `UNIT percent_VWC` unquoted (slides) | Parse error; only `"…"` | Quoted or bare | `test_device_class_forms_and_units` |
+| `MEASURES Moisture UNIT percent_VWC` (README §6.1, slides) | Parse error unquoted; any name, any unit string | Superseded by the measurement ontology: `MEASURES <quantity> IN <unit> FOLLOWING Moisture`; the old form is a parse error that shows the new one (see Extensions) | `test_device_class_forms_and_units`, `test_ontology.py` |
 | `zone ENUM *` as the user-defined distribution discriminator; one per class | Parsed into a flag nothing read; lowercase `zone` hung the parser | Any name and case; value read per device from the enterprise DB; more than one is an error | `test_resources.py` |
 | `device_id: Device(device_id) FK` / `Devices(device_id) FOREIGNKEY` (README §6.2, slides) | Parse error | Parsed and checked against the device table | `test_eventtype_fk_and_ingesttime` |
 | `INGESTTIME I MAXDELAY 5 MIN` (README §6.2) | Parse error | Parsed and simulated (see Interpretations) | `IngestTimeTests` |
@@ -108,3 +108,12 @@ readings (the first three were confirmed with the project owner):
 - Measures transmitted `ON_CHANGE` / `ON_THRESHOLD` are not checked by the
   correctness analyser, because those modes transmit a value-dependent
   subset of readings.
+
+## Extensions beyond the spec sheet
+
+| Extension | What it does | Test |
+|---|---|---|
+| Measurement ontology (`compiler/ontology/measurements.sql`) | `MEASURES` must name a quantity from a fixed SQL table (SI base, derived and dimensionless quantities), `IN` one of its units, and `FOLLOWING` the distribution it samples. Unknown quantities, wrong units and physically impossible `RANGE`s are compile errors. | `test_ontology.py` |
+| Device table required by the validator | A schema with no table `REFERENCES DEVICE_CLASS`, with two, or with a device table lacking exactly one `PRIMARY KEY` is rejected before any data is read. | `ValidationTests` in `test_resources.py` |
+| Battery `DECAY` on a device class | Per-device battery life drawn from a distribution; the spread of readings grows to `NOISE`x along a curve; the device goes silent when the battery is empty. | `test_decay.py` |
+| Several event types in one stream | Each device class is tagged with the listed event type whose name contains its measure or class name; the analyser checks all of them. | `test_each_class_gets_its_own_event_type` |

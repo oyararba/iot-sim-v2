@@ -11,7 +11,7 @@ from typing import List, Optional
 from lexer.tokenizer import Token, TT
 from ast_nodes.nodes import (
     ASTNode, Program,
-    MeasuresDef, DeviceClassNode,
+    MeasuresDef, DecayDef, DeviceClassNode,
     ColumnDef, TableNode,
     AttributeDef, FunctionalDep, EventTypeNode,
     ArrivalSpec, EventStreamNode,
@@ -135,10 +135,16 @@ class Parser:
 
         measures    = []
         user_fields = []
+        decay       = None
 
         while not self.match(TT.RPAREN):
             if self.match(TT.MEASURES):
                 measures.append(self._parse_measures())
+            elif self.match(TT.DECAY):
+                if decay is not None:
+                    raise ParseError(f'DEVICE_CLASS {name} has two DECAY clauses',
+                                     self.current)
+                decay = self._parse_decay()
             elif self.match(TT.ZONE, TT.IDENTIFIER) and self.peek().type == TT.ENUM:
                 # User-defined field: `zone ENUM *` (any name, any case).
                 # The value is resolved per device from the enterprise DB.
@@ -155,7 +161,45 @@ class Parser:
         self.expect(TT.RPAREN)
         self.skip_semicolons()
         return DeviceClassNode(name=name, measures=measures,
-                               user_fields=user_fields, line=line)
+                               user_fields=user_fields, line=line, decay=decay)
+
+    _DECAY_CURVES = ('LINEAR', 'QUADRATIC', 'EXPONENTIAL')
+
+    def _word_is(self, word: str) -> bool:
+        return str(self.current.value).upper() == word
+
+    def _parse_decay(self) -> DecayDef:
+        """
+        DECAY OVER <dist> (<params>) <time unit> NOISE <factor> [CURVE <curve>]
+
+        e.g. DECAY OVER NORMAL (mean = 180, std_dev = 20) DAYS NOISE 4.0 CURVE EXPONENTIAL
+        OVER, NOISE and CURVE are not reserved words.
+        """
+        line = self.current.line
+        self.expect(TT.DECAY)
+        if not self._word_is('OVER'):
+            raise ParseError('Expected OVER after DECAY '
+                             '(DECAY OVER NORMAL (mean = 180, std_dev = 20) DAYS NOISE 4.0)',
+                             self.current)
+        self.advance()
+        lifetime = self._parse_dist_spec()
+        unit_ms  = self._to_ms(1.0, self.advance())
+        noise, curve = None, 'LINEAR'
+        while self._word_is('NOISE') or self._word_is('CURVE'):
+            if self._word_is('NOISE'):
+                self.advance()
+                noise = self._parse_signed_number()
+            else:
+                self.advance()
+                curve = str(self.advance().value).upper()
+                if curve not in self._DECAY_CURVES:
+                    raise ParseError(f"Unknown DECAY CURVE {curve!r} "
+                                     f"(use {', '.join(self._DECAY_CURVES)})", self.current)
+        if noise is None:
+            raise ParseError('DECAY needs NOISE <factor>: how many times wider the '
+                             'spread is when the battery is empty', self.current)
+        return DecayDef(lifetime=lifetime, unit_ms=unit_ms, noise=noise,
+                        curve=curve, line=line)
 
 
     def _parse_signed_number(self) -> float:
@@ -166,13 +210,39 @@ class Parser:
             sign = -1.0
         return sign * float(self.advance().value)
     def _parse_measures(self) -> MeasuresDef:
+        """
+        MEASURES <quantity> [IN <unit>] [FOLLOWING <distribution>]
+            RANGE (<min>, <max>) RESOLUTION <step>
+
+        <quantity> and <unit> must come from the measurement ontology
+        (ontology/measurements.sql); the validator checks them. FOLLOWING names
+        the DISTRIBUTION the measure samples from; without it, the quantity's
+        own name is used (MEASURES Temperature -> DISTRIBUTION FOR Temperature).
+        """
         line = self.current.line
         self.expect(TT.MEASURES)
-        name = self.expect(TT.IDENTIFIER).value
-        self.expect(TT.UNIT)
-        if self.match(TT.LPAREN, TT.RPAREN, TT.COMMA, TT.EOF, TT.RANGE):
-            raise ParseError('Expected a unit after UNIT', self.current)
-        unit = self.advance().value          # "percent_VWC" or percent_VWC
+        quantity = self.expect(TT.IDENTIFIER).value
+        if self.match(TT.UNIT):
+            raise ParseError(
+                f"MEASURES {quantity} UNIT ... is the old form. Name a quantity from the "
+                f"measurement ontology and the distribution it follows: "
+                f"MEASURES <quantity> IN <unit> FOLLOWING {quantity} "
+                f"(e.g. MEASURES Temperature IN celsius FOLLOWING AirTemp; "
+                f"python3 compiler.py --list-quantities shows them all)", self.current)
+        unit, follows = None, None
+        while self.match(TT.IN, TT.FOLLOWING):
+            if self.match(TT.IN):
+                if unit is not None:
+                    raise ParseError('IN given twice', self.current)
+                self.advance()
+                if self.match(TT.LPAREN, TT.RPAREN, TT.COMMA, TT.EOF, TT.RANGE, TT.FOLLOWING):
+                    raise ParseError('Expected a unit after IN', self.current)
+                unit = str(self.advance().value)     # celsius, mg_per_kg or "°C"
+            else:
+                if follows is not None:
+                    raise ParseError('FOLLOWING given twice', self.current)
+                self.advance()
+                follows = self.expect(TT.IDENTIFIER).value
         self.expect(TT.RANGE)
         self.expect(TT.LPAREN)
         rmin = self._parse_signed_number()
@@ -181,8 +251,8 @@ class Parser:
         self.expect(TT.RPAREN)
         self.expect(TT.RESOLUTION)
         res  = float(self.advance().value)
-        return MeasuresDef(name=name, unit=unit, range_min=rmin, range_max=rmax,
-                           resolution=res)
+        return MeasuresDef(name=follows or quantity, quantity=quantity, unit=unit,
+                           range_min=rmin, range_max=rmax, resolution=res, line=line)
 
     # ------------------------------------------------------------------
     # CREATE TABLE

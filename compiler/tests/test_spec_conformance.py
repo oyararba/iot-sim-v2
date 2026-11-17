@@ -79,17 +79,17 @@ CREATE EVENTTYPE stats ( EVENTTIME T INTEGER, device_id STRING, lo FLOAT, hi FLO
 
 CLASSES = """
 CREATE DEVICE CLASS SoilMoistureSensor (
-    MEASURES Moisture UNIT percent_VWC RANGE (0.0, 100.0) RESOLUTION 0.1,
+    MEASURES VolumeFraction IN percent FOLLOWING Moisture RANGE (0.0, 100.0) RESOLUTION 0.1,
     zone ENUM *
 )
 CREATE DEVICE CLASS AirTemperatureSensor (
-    MEASURES AirTemp UNIT celsius RANGE (-20.0, 60.0) RESOLUTION 0.1,
+    MEASURES Temperature IN celsius FOLLOWING AirTemp RANGE (-20.0, 60.0) RESOLUTION 0.1,
     zone ENUM *
 )
 CREATE DEVICE CLASS NPKSensor (
-    MEASURES Nitrogen   UNIT mg_per_kg RANGE (0.0, 999.0) RESOLUTION 1.0,
-    MEASURES Phosphorus UNIT mg_per_kg RANGE (0.0, 999.0) RESOLUTION 1.0,
-    MEASURES Potassium  UNIT mg_per_kg RANGE (0.0, 999.0) RESOLUTION 1.0,
+    MEASURES MassFraction IN mg_per_kg FOLLOWING Nitrogen RANGE (0.0, 999.0) RESOLUTION 1.0,
+    MEASURES MassFraction IN mg_per_kg FOLLOWING Phosphorus RANGE (0.0, 999.0) RESOLUTION 1.0,
+    MEASURES MassFraction IN mg_per_kg FOLLOWING Potassium RANGE (0.0, 999.0) RESOLUTION 1.0,
     zone ENUM *
 )
 """
@@ -154,9 +154,10 @@ class SpecSheetSyntaxTests(unittest.TestCase):
         self.assertEqual(len(self.prog.rules), 8)
 
     def test_device_class_forms_and_units(self):
-        units = {m.name: m.unit for dc in self.prog.device_classes for m in dc.measures}
-        self.assertEqual(units['Moisture'], 'percent_VWC')      # quoted in the README
-        self.assertEqual(units['WindSpeed'], 'm_per_s')         # bare on the slides
+        ms = {m.name: (m.quantity, m.unit) for dc in self.prog.device_classes
+              for m in dc.measures}
+        self.assertEqual(ms['Moisture'], ('VolumeFraction', '%'))   # quoted symbol
+        self.assertEqual(ms['WindSpeed'], ('Speed', 'm_per_s'))     # bare unit name
 
     def test_eventtype_fk_and_ingesttime(self):
         reading = self.prog.event_types[0]
