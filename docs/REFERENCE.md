@@ -466,7 +466,9 @@ Options:
                        (one of --db / --devices is required unless --validate-only)
   --validate-only      Check the schema, and the resources if given; no simulation
   --sim-start   INT    Simulation start time                       [default: 0]
-  --sim-end     INT    Simulation end time                         [default: 90]
+  --sim-end     INT    Simulation end time        [default: 90; none with --num-events]
+  --num-events  INT    Stop after exactly N events (readings + rule events);
+                       alone: no time limit; with --sim-end: whichever comes first
   --time-unit   STR    Unit for sim-start/end: seconds|minutes|hours|days [default: days]
   --tick-unit   STR    Simulation resolution: seconds|minutes|hours  [default: minutes]
   --seed        INT    Random seed for reproducibility             [default: none; runs differ]
@@ -525,6 +527,8 @@ Simulation time is expressed in user-friendly units at the CLI and converted to 
 | 1 hour | 60 |
 | 1 day | 1,440 |
 | 90 days | 129,600 |
+
+**Stopping by time or by count.** A run ends at `--sim-end`, after `--num-events` events, or at whichever comes first when both are given (`simulation.end_time` and `simulation.max_events` in `profiles.json`; `end_time` is `null` for a count-only run). Because the heap pops entries in event-time order, a count-only run writes the first N events of the stream: with the same seed, the first N lines of a timed run long enough to hold them. Readings and rule events both count. Without a time limit the engine also stops, with a warning, once every device has stopped and no rule window still holds data (otherwise tumbling-window timers would re-arm forever), or after `STALL_LIMIT` (1,000,000) heap steps in a row without an event.
 
 ---
 

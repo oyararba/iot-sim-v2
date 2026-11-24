@@ -328,8 +328,9 @@ class SemanticValidator:
         for es in self.prog.event_streams:
             if len(es.event_types) > 1:
                 self._warn(f"EVENTSTREAM '{es.name}' lists {len(es.event_types)} event types; "
-                           f"the spec sheet streams one (sensor_reading). Devices are "
-                           f"assigned to them by name fragments (soil / environment ...)")
+                           f"the spec sheet streams one (sensor_reading). Each device class "
+                           f"is tagged with the listed type whose name contains its measure "
+                           f"or class name (Ammonia_Sensor -> Ammonia_Reading)")
 
         # Multi-measure devices send one packed reading on the first measure's schedule
         by_measure = {a.measure_name: a for es in self.prog.event_streams for a in es.arrivals}

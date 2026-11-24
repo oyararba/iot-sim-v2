@@ -31,6 +31,14 @@ engine processes, at each tick: tumbling-window closes for windows that
 ended before the tick, then readings, then triggered events due at the
 tick. Triggered events are written to the output and fed to downstream
 (chained) rules.
+
+Stopping (README §8.4): by time (`end_time`), by count (`max_events`), or
+whichever comes first. With `end_time` = None the run has no time limit
+and stops after exactly `max_events` events: the first N of the stream in
+event-time order, the same as the first N lines of a long enough timed run
+with the same seed. A count-only run also stops when no more events can
+come (every device stopped, nothing pending) or when STALL_LIMIT heap
+steps in a row produced none (e.g. FAILURE 1.0 drops every reading).
 """
 
 from __future__ import annotations
@@ -46,6 +54,17 @@ from codegen.rules import norm_const
 
 # heap priorities within one tick
 CLOSE, READING, TRIGGERED = 0, 1, 2
+
+# Count-only runs: give up after this many heap steps in a row without an event
+STALL_LIMIT = 1_000_000
+
+
+def _fmt_duration(ms: float) -> str:
+    """Simulated time, e.g. '2.3 days', '45 min'."""
+    for unit, size in (('days', 86_400_000), ('hours', 3_600_000), ('min', 60_000)):
+        if ms >= size:
+            return f'{ms / size:,.1f} {unit}'
+    return f'{ms / 1000:,.1f} s'
 
 
 # -----------------------------------------------------------------------
@@ -353,7 +372,11 @@ class FastSimulator:
 
         sim = compiled.get('simulation', {})
         self._start = int(sim.get('start_time', 0))
-        self._end   = int(sim.get('end_time', 1000))
+        end = sim.get('end_time', 1000)
+        self._max_events: Optional[int] = sim.get('max_events')
+        if end is None and not self._max_events:
+            raise ValueError('simulation needs an end_time, a max_events, or both')
+        self._end = math.inf if end is None else int(end)
         self.ms_per_tick = int(sim.get('ms_per_tick', ms_per_tick))
         ramp_n = int(sim.get('sticky_ramp', 5))
 
@@ -363,7 +386,13 @@ class FastSimulator:
         profiles = compiled.get('profiles', {})
         self._devices: Dict[str, Device] = {}
         self._heap: list = []
+        self._queued = [0, 0, 0]          # heap entries per priority (CLOSE, READING, TRIGGERED)
         self._seq = 0
+        self._emitted = 0
+        self._ran_to_end = False          # a device's next reading fell past end_time
+        self.stall_limit = STALL_LIMIT
+        self.stop_reason: Optional[str] = None   # count | end | stopped | stalled
+        self.last_event_time: Optional[float] = None
         for binding in compiled.get('bindings', []):
             dev = Device(binding, profiles, ramp_n, self._start)
             self._devices[dev.device_id] = dev
@@ -393,21 +422,45 @@ class FastSimulator:
 
     def _push(self, tick: float, prio: int, payload: Any):
         self._seq += 1
+        self._queued[prio] += 1
         heapq.heappush(self._heap, (tick, prio, self._seq, payload))
 
     # ------------------------------------------------------------------
 
+    def _span(self) -> str:
+        """How the run ends, for the start-up line."""
+        limit = self._max_events
+        if self._end == math.inf:
+            return f'Ticks {self._start}→ until {limit:,} events (no time limit)'
+        if limit:
+            return (f'Ticks {self._start}→{self._end} or {limit:,} events, '
+                    f'whichever comes first')
+        return f'Ticks {self._start}→{self._end}'
+
     def run(self, output_fn: Callable = None) -> List:
         self._emit = output_fn
         heap = self._heap
+        queued = self._queued
+        limit = self._max_events
+        unbounded = self._end == math.inf
         t0 = time.perf_counter()
         last_log = self._start
-        print(f'[FastSim] Ticks {self._start}→{self._end} | '
+        seen, idle = 0, 0
+        print(f'[FastSim] {self._span()} | '
               f'Devices: {len(self._devices)} | Rules: {len(self._rules)} | '
               f'ms/tick: {self.ms_per_tick}')
 
+        self.stop_reason = 'end'
         while heap:
+            if limit is not None and self._emitted >= limit:
+                self.stop_reason = 'count'
+                break
+            # Only window timers left and no data waiting in them: nothing more can come
+            if not queued[READING] and not queued[TRIGGERED] \
+                    and not any(r.buffers for r in self._rules):
+                break
             tick, prio, _, payload = heapq.heappop(heap)
+            queued[prio] -= 1
             if prio == READING:
                 if tick > self._end:
                     continue
@@ -423,13 +476,30 @@ class FastSimulator:
             else:
                 self._deliver(payload, tick)
 
+            if unbounded:                   # count-only: give up if events stop coming
+                if self._emitted != seen:
+                    seen, idle = self._emitted, 0
+                else:
+                    idle += 1
+                    if idle >= self.stall_limit:
+                        self.stop_reason = 'stalled'
+                        break
+
             if self.verbose > 0 and tick - last_log >= self.verbose:
                 wall = time.perf_counter() - t0
-                total = self.stats['persistent'] + self.stats['triggered']
-                pct = 100 * (tick - self._start) / max(self._end - self._start, 1)
+                total = self._emitted
+                if unbounded:
+                    pct = 100 * total / limit
+                else:
+                    pct = 100 * (tick - self._start) / max(self._end - self._start, 1)
                 print(f'  [t={tick:>7}] {pct:5.1f}%  events={total:,}  '
                       f'{total / max(wall, 0.001):,.0f} ev/s')
                 last_log = tick
+
+        if self.stop_reason == 'end' and limit is not None and self._emitted >= limit:
+            self.stop_reason = 'count'      # the last event allowed was also the last one
+        if self.stop_reason == 'end' and not self._ran_to_end:
+            self.stop_reason = 'stopped'    # every device stopped before end_time / forever
 
         wall = time.perf_counter() - t0
         st = self.stats
@@ -449,7 +519,30 @@ class FastSimulator:
         if st['triggered_after_end']:
             print(f'  Triggered events due after the end (not written): '
                   f'{st["triggered_after_end"]:,}')
+        if limit is not None:
+            self._report_count_stop(limit)
         return self._collected
+
+    def _report_count_stop(self, limit: int):
+        """Console lines for a run with max_events: where it stopped and why."""
+        last = self.last_event_time
+        when = ('' if last is None else
+                f', last event at tick {last:,} '
+                f'({_fmt_duration((last - self._start) * self.ms_per_tick)} simulated)')
+        if self.stop_reason == 'count':
+            print(f'  Stopped at {limit:,} events (--num-events){when}')
+            if self._queued[TRIGGERED]:
+                print(f'  Rule events still pending at the cut (not written): '
+                      f'{self._queued[TRIGGERED]:,}')
+            return
+        why = {
+            'end':     'reached --sim-end first',
+            'stopped': 'every device stopped transmitting (DECAY battery or '
+                       'FAILURE lifetime) and no rule events were pending',
+            'stalled': f'no event in the last {self.stall_limit:,} steps (FAILURE drops '
+                       f'every reading, or ON_CHANGE / ON_THRESHOLD never fires?)',
+        }[self.stop_reason]
+        print(f'  WARNING: only {self._emitted:,} of {limit:,} events: {why}{when}')
 
     # ------------------------------------------------------------------
     # Readings
@@ -499,6 +592,8 @@ class FastSimulator:
         nxt = tick + dev.interval
         if nxt <= self._end:
             self._push(nxt, READING, dev.device_id)
+        else:
+            self._ran_to_end = True
 
         if not emit:
             self.stats['dropped_no_change'] += 1
@@ -538,6 +633,8 @@ class FastSimulator:
     # ------------------------------------------------------------------
 
     def _deliver(self, ev: Dict, now: float):
+        self._emitted += 1
+        self.last_event_time = ev['event_time']
         if 'triggered_by' in ev:
             self.stats['triggered'] += 1
         else:

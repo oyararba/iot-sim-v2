@@ -184,7 +184,8 @@ No output files are written. The exit code is 0 on success and 1 on any error.
 | `--devices PATH` | none | JSON resource data (give `--db` or `--devices`, not both) |
 | `--output DIR` | `out` | Where `profiles.json` and `events.jsonl` go |
 | `--sim-start N` | `0` | Start of the simulation, in `--time-unit` |
-| `--sim-end N` | `90` | End of the simulation, in `--time-unit` |
+| `--sim-end N` | `90` (none with `--num-events`) | End of the simulation, in `--time-unit` |
+| `--num-events N` | none | Stop after exactly N events. See [Generating a fixed number of events](#generating-a-fixed-number-of-events) |
 | `--time-unit` | `days` | Unit of the two values above: `seconds`, `minutes`, `hours`, `days` |
 | `--tick-unit` | `minutes` | Length of one simulation tick: `seconds`, `minutes`, `hours` |
 | `--seed N` | none | Random seed. Without it, every run is different. |
@@ -198,6 +199,34 @@ Two of these deserve care:
 
 - **`--seed`**: pass one whenever you want to reproduce a run. The same seed and inputs give the same file.
 - **`--tick-unit`**: the tick is the smallest step of simulated time, and every timestamp in the output is counted in ticks. Set it to the shortest interval in the schema. Both examples have 1-minute sensors, so they use `minutes`. A tick longer than a rule window is a compile error; a tick longer than a sensor interval rounds that interval up to one tick, with a warning.
+
+### Generating a fixed number of events
+
+A run stops by time, by count, or by whichever comes first:
+
+| Flags | Stops |
+|---|---|
+| `--sim-end 7` (or neither flag: 90 days) | After 7 days of simulated time, however many events that is |
+| `--num-events 100000` | After exactly 100,000 events, however much simulated time that takes |
+| `--sim-end 7 --num-events 100000` | At whichever limit comes first |
+
+```bash
+python3 compiler.py \
+    --schema  examples/precision_agriculture.sql \
+    --db      examples/agriculture_resources.db \
+    --num-events 50000 --tick-unit minutes \
+    --seed    42 \
+    --output  out/
+```
+
+```
+[FastSim] Done: 50,000 events in 0.59s (84,504 ev/s)
+  Stopped at 50,000 events (--num-events), last event at tick 6,065 (4.2 days simulated)
+```
+
+- **Every event counts**: sensor readings and rule events (averages, alerts, reports), so `events.jsonl` has exactly N lines.
+- **The events are the first N of the stream.** With the same seed, they are byte-identical to the first N lines of a timed run long enough to contain them. The cut can fall inside a tick, and rule events already scheduled for later are not written; the console reports how many.
+- **A count-only run may end short.** It stops with a warning when every device has stopped transmitting (a `DECAY` battery or `FAILURE <duration>` lifetime) or when no event has come for a million steps (for example `FAILURE 1.0`, which drops every reading).
 
 ## Reading the output
 
@@ -220,6 +249,8 @@ Two of these deserve care:
 | `Triggered events due after the end (not written)` | Rule results whose fire time fell past `--sim-end`. Expected for windows that close at the very end. |
 | `Stale`, `Sensors failed` | Shown only when the schema uses `INGESTTIME` or a `FAILURE <duration>` sensor lifetime |
 | `Batteries run down (DECAY)` | Shown only when a device class has `DECAY`: devices whose battery emptied and that stopped transmitting |
+| `Stopped at N events`, `Rule events still pending at the cut` | Shown only with `--num-events`: where the count was reached, and rule events scheduled after the cut that were not written |
+| `WARNING: only X of N events` | `--num-events` could not be reached: `--sim-end` came first, every device stopped, or no event could come |
 
 ### events.jsonl
 
@@ -324,7 +355,7 @@ Measures sent `ON_CHANGE` or `ON_THRESHOLD` are listed but not checked, because 
 ## Tests and benchmarks
 
 ```bash
-python3 -m unittest discover -s tests        # 87 tests, about 3 seconds
+python3 -m unittest discover -s tests        # 98 tests, about 4 seconds
 ```
 
 ```bash

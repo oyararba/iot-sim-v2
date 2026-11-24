@@ -1,0 +1,59 @@
+{
+  "Fridge_Zones": [
+    {
+      "zone_id": 1,
+      "zone_name": "Poultry_Drawer",
+      "zone_location": "Bottom_Shelf"
+    },
+    {
+      "zone_id": 2,
+      "zone_name": "Veggie_Drawer",
+      "zone_location": "Top_Shelf"
+    },
+    {
+      "zone_id": 3,
+      "zone_name": "Fruit_Drawer",
+      "zone_location": "Middle_Shelf"
+    }
+  ],
+  "Sensor_Deployment": [
+    {
+      "device_id": "AMMONIA_SENSOR_01",
+      "device_class": "Ammonia_Sensor",
+      "zone_id": 1
+    },
+    {
+      "device_id": "ETHYLENE_SENSOR_02",
+      "device_class": "Ethylene_Sensor",
+      "zone_id": 2
+    },
+    {
+      "device_id": "ETHYLENE_SENSOR_03",
+      "device_class": "Ethylene_Sensor",
+      "zone_id": 3
+    }
+  ],
+  "Fridge_Inventory": [
+    {
+      "ItemID": "CHICKEN_01",
+      "ItemType": "Poultry",
+      "ItemName": "Raw_Chicken",
+      "zone_id": 1,
+      "DateAdded": 0
+    },
+    {
+      "ItemID": "SPINACH_01",
+      "ItemType": "Produce",
+      "ItemName": "Spinach",
+      "zone_id": 2,
+      "DateAdded": 0
+    },
+    {
+      "ItemID": "APPLE_01",
+      "ItemType": "Produce",
+      "ItemName": "Apples",
+      "zone_id": 3,
+      "DateAdded": 0
+    }
+  ]
+}

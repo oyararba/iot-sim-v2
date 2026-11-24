@@ -1,0 +1,20 @@
+-- 15-minute average ammonia per zone
+new Ammonia_Avg[sliding(s, 15 MIN)](zone_id, (avg_ppm = avg(value))) @ (s + 15 MIN) :-
+    Ammonia_Reading(device_id, zone_id, value) @ t;
+
+-- 30-minute average ethylene per zone
+new Ethylene_Avg[sliding(s, 30 MIN)](zone_id, (avg_ppm = avg(value))) @ (s + 30 MIN) :-
+    Ethylene_Reading(device_id, zone_id, value) @ t;
+
+new High_Ammonia_Alert(zone_id, avg_ppm) @ (t) :-
+    Ammonia_Avg(zone_id, avg_ppm) @ t,
+    avg_ppm > 12.0;
+
+-- zone 1 is the poultry drawer
+new ChickenSpoiledAlert("CHICKEN_01", zone_id, avg_ppm, 0) @ (t) :-
+    High_Ammonia_Alert(zone_id, avg_ppm) @ t,
+    zone_id = 1;
+
+new ProduceOverripeAlert("PRODUCE", zone_id, avg_ppm, 0) @ (t) :-
+    Ethylene_Avg(zone_id, avg_ppm) @ t,
+    avg_ppm > 15.0;

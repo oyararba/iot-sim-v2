@@ -77,8 +77,13 @@ def build_arg_parser():
                    help='Output directory (default: out/)')
     p.add_argument('--sim-start', type=int,   default=0,
                    help='Simulation start in --time-unit units (default: 0)')
-    p.add_argument('--sim-end',   type=int,   default=90,
-                   help='Simulation end in --time-unit units (default: 90)')
+    p.add_argument('--sim-end',   type=int,   default=None,
+                   help='Simulation end in --time-unit units (default: 90; '
+                        'no time limit when --num-events is given)')
+    p.add_argument('--num-events', type=int, default=None, metavar='N',
+                   help='Stop after exactly N events (sensor readings + rule events, '
+                        'i.e. N lines of events.jsonl). Alone: no time limit. With '
+                        '--sim-end: whichever comes first.')
     p.add_argument('--time-unit', default='days',
                    choices=['seconds', 'minutes', 'hours', 'days'],
                    help='Unit for sim-start and sim-end (default: days)')
@@ -105,6 +110,10 @@ def main():
         return
     if not args.schema:
         ap.error('--schema is required')
+    if args.num_events is not None and args.num_events < 1:
+        ap.error('--num-events must be at least 1')
+    if args.sim_end is None and args.num_events is None:
+        args.sim_end = 90                       # the default run: 90 days
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -176,16 +185,19 @@ def main():
     # Convert sim duration to ticks
     time_unit_to_min  = {'seconds': 1/60, 'minutes': 1, 'hours': 60, 'days': 1440}
     tick_unit_to_min  = {'seconds': 1/60, 'minutes': 1, 'hours': 60}
-    sim_duration_min  = args.sim_end   * time_unit_to_min[args.time_unit]
     sim_start_min     = args.sim_start * time_unit_to_min[args.time_unit]
     min_per_tick      = tick_unit_to_min[args.tick_unit]
     start_tick        = int(sim_start_min / min_per_tick)
-    end_tick          = int(sim_duration_min / min_per_tick)
+    end_tick          = None                # None: no time limit (count-only run)
+    if args.sim_end is not None:
+        sim_duration_min = args.sim_end * time_unit_to_min[args.time_unit]
+        end_tick         = int(sim_duration_min / min_per_tick)
     ms_per_tick       = int(min_per_tick * 60 * 1000)
 
     sim_cfg = {
         'start_time':  start_tick,
         'end_time':    end_tick,
+        'max_events':  args.num_events,
         'time_unit':   'ticks',
         'tick_unit':   args.tick_unit,
         'ms_per_tick': ms_per_tick,
@@ -217,9 +229,16 @@ def main():
         print('\n[Compiler] Resources OK (validate-only: not simulating).')
         return
 
-    print(f'\n[Compiler] Simulation: {args.sim_start}-{args.sim_end} {args.time_unit} ')
+    n = args.num_events
+    if end_tick is None:
+        print(f'\n[Compiler] Simulation: from {args.sim_start} {args.time_unit} until '
+              f'{n:,} events (no time limit)')
+    else:
+        print(f'\n[Compiler] Simulation: {args.sim_start}-{args.sim_end} {args.time_unit}'
+              + (f', or {n:,} events if that comes first' if n else ''))
     print(f'           Tick unit : 1 {args.tick_unit} = {ms_per_tick} ms/tick')
-    print(f'           Total ticks: {end_tick - start_tick:,}')
+    if end_tick is not None:
+        print(f'           Total ticks: {end_tick - start_tick:,}')
 
     # Write profiles.json
     profiles_path = out_dir / 'profiles.json'

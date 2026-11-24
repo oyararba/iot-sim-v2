@@ -101,8 +101,8 @@ readings (the first three were confirmed with the project owner):
 ## Not covered
 
 - Multiple event streams are future work on the slides; a stream listing
-  several event types still routes devices by name fragments, with a
-  warning.
+  several event types routes each device class to the listed type named
+  after its measure or class (see Extensions), with a warning.
 - The hospital example the README describes is not in the repository.
 - `engine/simulator.py` is the original engine, kept for reference only.
 - Measures transmitted `ON_CHANGE` / `ON_THRESHOLD` are not checked by the
@@ -117,3 +117,4 @@ readings (the first three were confirmed with the project owner):
 | Device table required by the validator | A schema with no table `REFERENCES DEVICE_CLASS`, with two, or with a device table lacking exactly one `PRIMARY KEY` is rejected before any data is read. | `ValidationTests` in `test_resources.py` |
 | Battery `DECAY` on a device class | Per-device battery life drawn from a distribution; the spread of readings grows to `NOISE`x along a curve; the device goes silent when the battery is empty. | `test_decay.py` |
 | Several event types in one stream | Each device class is tagged with the listed event type whose name contains its measure or class name; the analyser checks all of them. | `test_each_class_gets_its_own_event_type` |
+| Stopping by count (`--num-events N`) | Exactly N events (readings + rule events), the first N of the stream in event-time order. Alone it has no time limit; with `--sim-end`, whichever comes first. A count-only run stops early, with a warning, when every device has stopped or no event can come. | `test_event_count.py` |
